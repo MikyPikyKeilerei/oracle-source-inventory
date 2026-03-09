@@ -1,5 +1,6 @@
-# Windows WSL Alternate Data Streams
+# Windows WSL Alternate Data Streams (regulärer und Fullwidth-Doppelpunkt)
 *:Zone.Identifier
+*：Zone.Identifier
 
 # Exports (können sensible Produktionsdaten enthalten)
 exports/*.csv
