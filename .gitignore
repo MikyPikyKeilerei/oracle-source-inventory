@@ -2,6 +2,9 @@
 *:Zone.Identifier
 *：Zone.Identifier
 
+# Oracle Scripts (proprietärer Code)
+scripts/
+
 # Exports (können sensible Produktionsdaten enthalten)
 exports/*.csv
 
