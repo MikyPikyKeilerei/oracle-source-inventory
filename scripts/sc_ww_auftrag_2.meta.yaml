@@ -1,0 +1,127 @@
+job_name: sc_ww_auftrag_2
+description: "Ladung der Smaragd-Auftragspositionen und Auftragssperren ins Source-Core. Verarbeitet zwei Entitaeten sequenziell: (1) sc_ww_auftragpos inkl. Versionstabelle sowie (2) sc_ww_auftragsperre inkl. Versionstabelle. Pro Entitaet: Cleanse-Zwischentabellen laden, Referenzaufloesung gegen SC-Lookup-Tabellen, Error-Handling in _e-Tabellen."
+type: script
+created_at: "2016-11-17"
+created_by: "Andrea Gagulic"
+last_changed: "2021-09-23"
+last_changed_by: tetfra
+change_count: 7
+confluence_url: "https://confluence.witt-gruppe.eu/display/IM/Auftrag"
+migration_status: pending
+
+target_tables:
+  - sc_ww_auftragpos
+  - sc_ww_auftragpos_ver
+  - sc_ww_auftragsperre
+  - sc_ww_auftragsperre_ver
+
+cleanse_tables:
+  - clsc_ww_auftragpos
+  - clsc_ww_auftragpos_1
+  - clsc_ww_auftragpos_d
+  - clsc_ww_auftragpos_e
+  - clsc_ww_auftragsperre
+  - clsc_ww_auftragsperre_1
+  - clsc_ww_auftragsperre_d
+  - clsc_ww_auftragsperre_e
+
+source_tables:
+  - st_ww_auftragpos_b
+  - st_ww_auftragsperre_b
+
+lookup_tables:
+  # Referenzaufloesung Auftragpos (Abschnitt 1.5)
+  - sc_ww_zahlwunschkz
+  - sc_ww_artkatkz
+  - sc_ww_artmgeinhkz
+  - sc_ww_ersarttypkz
+  - sc_ww_ersartkdwukz
+  - sc_ww_aktliefstat
+  - sc_ww_komliefstat
+  - sc_ww_posfehlerkz
+  - sc_ww_auftrstornokz
+  - sc_ww_valkz
+  - sc_ww_zugestartartkz
+  - sc_ww_ratenaufschlag
+  - sc_ww_auftragkopf
+  - sc_ww_valutaaktion
+  - sc_ww_hvermerkkz
+  - sc_ww_lokz
+  - sc_ww_posstatkz
+  - sc_ww_faktstatkz
+  - sc_ww_nalistatkz
+  - sc_ww_vertrgebiet
+  - sc_ww_lvfehlkz
+  - sc_ww_naligauftgrukz
+  - sc_ww_naliaktionkz_host    # umbenannt aus sc_ww_naliaktionkz (03.11.2020)
+  - sc_ww_nalispesenfreikz
+  - sc_ww_zahlmethode
+  - sc_ww_zahlwunsch
+  - sc_ww_naligauftfehlkz
+  - sc_ww_alfa_ersatzart
+  - sc_ww_mwst
+  - sc_ww_prozessletztaend
+  # Referenzaufloesung Auftragsperre (Abschnitt 2.5)
+  - sc_ww_auftrsperrverw
+  - sc_ww_benutzer
+  - sc_ww_prozessanl
+  - sc_ww_benutzergeklaert
+  - sc_ww_prozessgeklaert
+
+db_links: []
+# Hinweis: @udwht2 war fuer sc_ww_alfa_ersatzart in Nutzung, 19.04.2018 entfernt.
+
+precondition_tables: []
+precondition_processes:
+  - KDWH.SC_WW_AUFTRAG_TEST_1
+  - UDWH1.SC_WW_AUFTRAG_TEST_1
+
+parameters:
+  - gbvid    # GBV-Job ID, wird als dwh_cr_load_id / dwh_up_load_id eingetragen
+  - termin   # Prozessdatum, filtert dwh_processdate
+
+packages:
+  - PKG_STATS.GATHERTABLE
+  - PKG_IM_LADUNG.P_SC_ERROR_HANDLING
+
+sections:
+  - id: "1"
+    description: "Source Core-Ladung Auftragspositionen (sc_ww_auftragpos / sc_ww_auftragpos_ver)"
+  - id: "1.1"
+    description: "TRUNCATE clsc_ww_auftragpos, clsc_ww_auftragpos_1, clsc_ww_auftragpos_d"
+  - id: "1.2"
+    description: "INSERT ALL aus st_ww_auftragpos_b -> clsc_ww_auftragpos_1 (N/U) / clsc_ww_auftragpos_d (D)"
+  - id: "1.3"
+    description: "Statistiken: PKG_STATS.GATHERTABLE fuer clsc_ww_auftragpos_1 und clsc_ww_auftragpos_d"
+  - id: "1.4"
+    description: "Error Handling: PKG_IM_LADUNG.P_SC_ERROR_HANDLING auf clsc_ww_auftragpos, Key id_key,id"
+  - id: "1.5"
+    description: "Referenzaufloesung: INSERT FIRST aus clsc_ww_auftragpos_1 mit 30 LEFT OUTER JOINs; Fehler -> clsc_ww_auftragpos_e, valide -> clsc_ww_auftragpos"
+  - id: "1.6"
+    description: "Statistiken: PKG_STATS.GATHERTABLE fuer clsc_ww_auftragpos und clsc_ww_auftragpos_e"
+  - id: "2"
+    description: "Source Core-Ladung Auftragssperren (sc_ww_auftragsperre / sc_ww_auftragsperre_ver)"
+  - id: "2.1"
+    description: "TRUNCATE clsc_ww_auftragsperre, clsc_ww_auftragsperre_1, clsc_ww_auftragsperre_d"
+  - id: "2.2"
+    description: "INSERT ALL aus st_ww_auftragsperre_b -> clsc_ww_auftragsperre_1 (N/U) / clsc_ww_auftragsperre_d (D)"
+  - id: "2.3"
+    description: "Statistiken: PKG_STATS.GATHERTABLE fuer clsc_ww_auftragsperre_1 und clsc_ww_auftragsperre_d"
+  - id: "2.4"
+    description: "Error Handling: PKG_IM_LADUNG.P_SC_ERROR_HANDLING auf clsc_ww_auftragsperre, Key id_key"
+  - id: "2.5"
+    description: "Referenzaufloesung: INSERT FIRST aus clsc_ww_auftragsperre_1 mit 6 LEFT OUTER JOINs; Fehler -> clsc_ww_auftragsperre_e, valide -> clsc_ww_auftragsperre"
+  - id: "2.6"
+    description: "Statistiken: PKG_STATS.GATHERTABLE fuer clsc_ww_auftragsperre und clsc_ww_auftragsperre_e"
+
+notes: |
+  - Unsicherheit: _ver-Tabellen (sc_ww_auftragpos_ver, sc_ww_auftragsperre_ver) sind als Endtabellen
+    deklariert, werden aber im ausfuehrbaren Code nicht direkt beschrieben. Befuellung durch
+    nachgelagerten Prozess (nicht sichtbar).
+  - sc_ww_naliaktionkz_host: Seit 03.11.2020 (tetfra) ersetzt sc_ww_naliaktionkz; alter Join auskommentiert.
+  - Historisch war @udwht2 fuer sc_ww_alfa_ersatzart im Einsatz (entfernt 19.04.2018 elifal).
+  - Offene TODOs im Code: dwh_id_sc_ww_zugestartartkz, dwh_id_sc_ww_lvfehlkz, dwh_id_sc_ww_faktstatkz
+    fuer Altdaten vor 28.03 setzen + Spaltenreihenfolge in Versionstabelle korrigieren.
+  - Precondition_processes aus Header-Kommentar extrahiert; genaue Pruefmechanik nicht im Code sichtbar.
+  - ALTER SESSION ENABLE PARALLEL DML aktiv.
+  - Ladung ab 05.01.2015 01:00; Altdaten manuell eingespielt.

@@ -1,0 +1,170 @@
+flowchart TD
+
+  %% ── UPSTREAM JOBS (Gates) ─────────────────────────────────────────────────
+  subgraph UPSTREAM["Upstream-Jobs (Gates B + C)"]
+    J_BUCH["CC_WW_BUCHUNG\n(Gate B)"]
+    J_KUND["CC_WW_KUNDE\n(Gate C)"]
+  end
+
+  %% ── GATE-METADATEN ────────────────────────────────────────────────────────
+  subgraph GATE_META["Gate-Metadaten"]
+    CC_LV["cc_fakturakalenderlv\n(LV-Tag-Check B+C)"]
+    LH_UDWH["udwh_loadhistory\n(Gate B)"]
+    LH_DBL["udwh_dh.udwh_loadhistory\n@DBL_LOADER()\n(Gate C)"]
+    GBV["GBV_BATCH_JOB\n(Gates A+D)"]
+  end
+
+  J_BUCH -->|"schreibt"| LH_UDWH
+  J_KUND -->|"schreibt"| LH_DBL
+  CC_LV --> GATE_CHECK
+  LH_UDWH --> GATE_CHECK
+  LH_DBL --> GATE_CHECK
+  GBV --> GATE_CHECK
+  GATE_CHECK{"Gates A/B/C/D\nalle ok?"}
+
+  %% ── STEP 1: Auftragskennzahlen ────────────────────────────────────────────
+  subgraph S1["Step 1 · Auftragskennzahlen"]
+    CC_BUCH["cc_buchung\n(→ CC_WW_BUCHUNG)"]
+    T1["cldm_{sst}_f_ecat_1\nauftrnr_key, konto_id_key,\nbuchdat,\nauftraege=1/SUM(ansprmenge),\nauftraegeovf"]
+  end
+  CC_BUCH -->|"Filter: ansprmenge>0\nbuchdat BETWEEN hjanfang/datum\nvfart NOT IN(2,4)\nvtg!=21\nfirma∈SST NOT IN(13,14,35)\nartnr!=992444"| T1
+
+  %% ── STEP 2: Kundendaten ───────────────────────────────────────────────────
+  subgraph S2["Step 2 · Kundendaten (Dynamic SQL)"]
+    CC_KUND["cc_kunde_{vtsaison}\n(→ CC_WW_KUNDE)"]
+    CC_VTI2["cc_vtinfogrp\n(sg!=9999 Filter)"]
+    CC_FIRM2["cc_firma\n(valid_from/to)"]
+    CC_LAND["cc_land"]
+    CC_WAEH["cc_waehrung\n(wechselkurs)"]
+    T2["cldm_{sst}_f_ecat_2\nkonto_id_key, jahrgang,\nfirma, vtinfogrp,\nmehrlinien≥0,\nwechselkurs,\nshopanteiligkeit\n⚑ datum≥2021-07-01:\n  aus Tabelle\n⚑ datum<2021-07-01:\n  = -2"]
+  end
+  CC_KUND --> T2
+  CC_VTI2 --> T2
+  CC_FIRM2 --> T2
+  CC_LAND --> T2
+  CC_WAEH --> T2
+
+  %% ── STEP 3a: Buchungsdaten ────────────────────────────────────────────────
+  subgraph S3A["Step 3a · Buchungsdaten (1. Pass)"]
+    CC_FIRM3["cc_firma\n(SST-Filter &6)"]
+    T3A["cldm_{sst}_f_ecat_3\n(1. Pass)\nalle Buchungs-Kennzahlen\n+ Auftragsanteil verteilt\nattr-Felder = NULL\n⚑ Heine-Bestellkanal-Fix\n⚑ bestellmedium 4→2"]
+  end
+  CC_BUCH -->|"JOIN _2 (konto+firma+datum)\nLEFT JOIN _1 (auftrnr+konto+buchdat)"| T3A
+  T2 --> T3A
+  T1 --> T3A
+  CC_FIRM3 --> T3A
+
+  %% ── STEP 5.1: Attributionsdaten ───────────────────────────────────────────
+  subgraph S51["Step 5.1 · Attributionsdaten (2 Inserts)"]
+    CC_SNOW["cc_snow_attribution\n⚠ Upstream unbekannt!"]
+    CC_BKA["cc_bestellkanal_akt_v\n(nur auftrart=4 Internet)"]
+    CC_FIRMA["cc_firma_akt_v\n(SST-Filter)"]
+    T5["cldm_{sst}_f_ecat_5\nauftrnr_key, konto_id_key,\nfirma, factor_percent,\necc, bestellkanal\n---\nInsert 1: aktuelle Saison\n(auftrdat+1 ∈ hjanfang..datum)\nInsert 2: Altdaten vor Saison\n(auftrnr,firma) ∈ _3"]
+  end
+  CC_SNOW --> T5
+  CC_BKA --> T5
+  CC_FIRMA --> T5
+  T3A -->|"Insert 2:\n(auftrnr_key,firma)∈_3"| T5
+
+  %% ── STEP 5.2: Attribution berechnen ──────────────────────────────────────
+  subgraph S52["Step 5.2 · Attributionswerte berechnen (2 Inserts)"]
+    T6["cldm_{sst}_f_ecat_6\nbuchdatnr, auftrdat,\nfirma, konto_id_key,\nauftrnr_key, auftrpos,\nart_id, promnr, ecc,\nbestellkanal,\nansprwert_attr,\nnumswert_attr,\nauftraege_attr\n---\nInsert 1: konto_id_key stimmt\nInsert 2: Retoure\n(konto_id_key ändert sich!)"]
+  end
+  T3A -->|"_3 b (Buchungsdaten)"| T6
+  T5 -->|"_5 (factor_percent, ecc)"| T6
+  T1 -->|"LEFT JOIN _1\n(auftraege für attr)"| T6
+
+  %% ── STEP 3b: Attribution einspielen ──────────────────────────────────────
+  subgraph S3B["Step 3b · Attributionen → _3 (2. Pass)"]
+    T3B["cldm_{sst}_f_ecat_3\n(2. Pass APPEND)\nNeue Zeilen:\nalle Kennzahlen = 0\nnur ansprwert_attr,\nnumswert_attr,\nauftraege_attr befüllt\n⚠ Doppelschreiber!"]
+  end
+  T6 -->|"JOIN _3 ON\nauftrnr+buchdatnr\n+auftrpos+art_id\n+promnr+firma"| T3B
+  T3A -->|"Kundendaten aus _3"| T3B
+
+  %% ── STEP 6: Gruppieren ────────────────────────────────────────────────────
+  subgraph S6["Step 6 · Buchungen gruppieren"]
+    T7["cldm_{sst}_f_ecat_7\nGROUP BY alle Dim.\nSUM alle Kennzahlen\n(regulär + attr)"]
+  end
+  T3B -->|"_3 komplett\n(Pass 1 + Pass 2)"| T7
+
+  %% ── STEP 7: Positionen ────────────────────────────────────────────────────
+  subgraph S7["Step 7 · Positionen zählen"]
+    T4["cldm_{sst}_f_ecat_4\nauftrnr_key, artnr, artgr,\nanzeinzelpos\n=COUNT(DISTINCT artnr*artgr\n  WHERE ansprmenge>0),\nanzgesamtpos\n=COUNT(DISTINCT artnr*promnr\n  *artgr*auftrpos\n  WHERE ansprmenge>0)"]
+  end
+  T3B -->|"_3 (beide Passes)"| T4
+
+  %% ── STEP 8/8b: Stage Brutto/Netto ────────────────────────────────────────
+  subgraph S8["Step 8/8b · Stage Brutto + Netto"]
+    CC_FIRM8["cc_firma\n(bez = firmabez,\ndwh_status=1)"]
+    SB["cldm_{sst}_f_ecat_brutto\nALLE Zeilen\n+ alterswert\n+ artikelposition\n+ firmabez (bez)\n⚑ katart NULL+firma74→-2\n⚑ appinfo/bestellmedium\n  ≤20200930→-2"]
+    SN["cldm_{sst}_f_ecat_netto\nWHERE bruttonetto\nIN (1,-3)\n(einziger Unterschied\nzu Brutto!)"]
+  end
+  T7 --> SB
+  T7 --> SN
+  T4 -->|"LEFT JOIN _4\n(artikelposition)"| SB
+  T4 -->|"LEFT JOIN _4\n(artikelposition)"| SN
+  CC_FIRM8 -->|"JOIN (firma=wert\ndwh_status=1)"| SB
+  CC_FIRM8 --> SN
+
+  %% ── STEP 9/9b: kwkum ──────────────────────────────────────────────────────
+  subgraph S9["Step 9/9b · Wochenaggregate (PL/SQL Cursor)"]
+    CC_KAL["cc_kalender\nCursor:\nDISTINCT witt_woche_id\nhjanfang–datum"]
+    CC_VTI9["cc_vtinfogrp\nverd1sort4\n=vtinfogrp_a14"]
+    CC_BK9["cc_bestellkanal\nverd1sort4\n=bestellkanal_a14"]
+    CC_KAT["cc_katart\nverd1sort2\n=katart_a12"]
+    CC_ART["cc_art\nbestandsfirma"]
+    CC_MKZ["cc_marktkz\nLEFT JOIN"]
+    CC_OMK["cc_obermarktkz\nverd1sort1\n=marktkz_a12\nLEFT JOIN"]
+    SK_B["cldm_{sst}_f_ecat_kwkum_brutto\nwittwochenr, firmabez,\nmarktkz_a12, katart_a12,\nvtinfogrp_a14,\nbestellkanal_a14,\nbestandsfirma,\nSUM alle Kennzahlen\n(inkl. attr)\nCOMMIT je Woche"]
+    SK_N["cldm_{sst}_f_ecat_kwkum_netto\n(analog, Quelle: _netto)"]
+  end
+  SB --> SK_B
+  SN --> SK_N
+  CC_KAL --> SK_B
+  CC_KAL --> SK_N
+  CC_VTI9 --> SK_B & SK_N
+  CC_BK9 --> SK_B & SK_N
+  CC_KAT --> SK_B & SK_N
+  CC_ART --> SK_B & SK_N
+  CC_MKZ --> SK_B & SK_N
+  CC_OMK --> SK_B & SK_N
+
+  %% ── ABSCHLUSS ─────────────────────────────────────────────────────────────
+  subgraph ABSCHLUSS["Abschluss-Skript (DSVFehler=00000/00010)"]
+    A12["A1: RANGE-Partition YYYYMM\nA2: TRUNCATE SUBPARTITION\n(buchdat, firmabez)\nCursor über Stage Brutto"]
+    A3["A3: PKG_IM_LADUNG.P_LADUNG_BEW"]
+    A45["A4: LIST-Partition witt_woche_id\n(Lookup: cc_kalender→&datum)\nA5: TRUNCATE SUBPARTITION\n(wittwochenr, firmabez)"]
+    A6["A6: PKG_IM_LADUNG.P_LADUNG_BEW"]
+    A7["A7: PKG_IM_LADUNG.P_LOADHISTORY\n→ udwh_loadhistory"]
+  end
+  SK_B & SK_N --> A45
+  SB & SN --> A12
+  A12 --> A3
+  A45 --> A6
+  A3 & A6 --> A7
+
+  %% ── ZIELTABELLEN ──────────────────────────────────────────────────────────
+  subgraph TARGETS["Zieltabellen"]
+    T_B["dm_f_ecat_brutto\nRANGE(YYYYMM)\n+SUB(buchdat,firmabez)"]
+    T_N["dm_f_ecat_netto\nRANGE(YYYYMM)\n+SUB(buchdat,firmabez)"]
+    T_KB["dm_f_ecat_kwkum_brutto\nLIST(witt_woche_id)\n+SUB(wittwochenr,firmabez)"]
+    T_KN["dm_f_ecat_kwkum_netto\nLIST(witt_woche_id)\n+SUB(wittwochenr,firmabez)"]
+  end
+  A3 --> T_B & T_N
+  A6 --> T_KB & T_KN
+  A7 -->|"downstream Gates"| LH_UDWH
+
+  %% ── DOWNSTREAM ────────────────────────────────────────────────────────────
+  T_B & T_N & T_KB & T_KN --> DS["Power BI / Gold-Layer\n(downstream, noch zu erfassen)"]
+
+  %% ── GATE-VERBINDUNG ────────────────────────────────────────────────────────
+  GATE_CHECK -->|"ok → Start"| T1
+
+  %% ── STYLES ────────────────────────────────────────────────────────────────
+  style CC_SNOW   fill:#ffe0b2,stroke:#e65100
+  style T3B       fill:#ffe0b2,stroke:#e65100
+  style GATE_CHECK fill:#e3f2fd,stroke:#1565c0
+  style UPSTREAM  fill:#f3e5f5,stroke:#6a1b9a
+  style ABSCHLUSS fill:#e8f5e9,stroke:#2e7d32
+  style TARGETS   fill:#fce4ec,stroke:#880e4f
+  style S3B       fill:#fff3e0,stroke:#e65100

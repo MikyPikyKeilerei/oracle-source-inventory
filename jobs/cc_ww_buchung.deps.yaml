@@ -1,0 +1,47 @@
+job: cc_ww_buchung
+
+upstream_jobs:
+  - job: SC_WW_BUCHUNG
+    type: precondition
+    check: GBV_BATCH_JOB
+    liefert: sc_ww_buchung
+    hinweis: Primäre Tagesladung – Buchungssätze des Tages
+
+  - job: SC_WW_AUFTRAG
+    type: precondition_unbestaetigt
+    check: unklar
+    liefert: [sc_ww_auftragkopf_ver, sc_ww_auftragpos_ver]
+    hinweis: |
+      Unsicherheit: kein explizites Gate im Script für diese Tabellen gefunden.
+      In sc_ww_auftragkopf_ver / sc_ww_auftragpos_ver läuft welcher Job?
+
+  - job: CC_ART
+    type: precondition_unbestaetigt
+    check: unklar
+    liefert: cc_art
+    hinweis: Wird für art_id-Validierung (Step 8.2) benötigt – welcher Job befüllt cc_art?
+
+external_deps: []   # keine DB-Links im Script
+
+downstream:
+  - table: cc_buchung
+    layer: CC
+    hinweis: |
+      Finale Tabelle. Wird von dm_f_ecat (Gate B) als Upstream-Check geprüft.
+      Abschluss-Script schreibt Loadhistory → udwh_loadhistory.
+  - table: sc_bestellzaehler
+    layer: SC
+    hinweis: Update im Abschluss-Script via clcc_ww_buchung_23
+
+params:
+  - termin
+  - gbvid
+  - vtsaison
+  - vtsaisonm1
+  - vtsaisonm2
+  - vtsaisonp1
+
+open_issues:
+  - SC_WW_AUFTRAG upstream Job bestätigen (welcher Job befüllt auftragkopf_ver / auftragpos_ver?)
+  - CC_ART upstream Job bestätigen
+  - Abschluss-Script analysieren (sc_bestellzaehler-Update, MERGE cc_buchung)

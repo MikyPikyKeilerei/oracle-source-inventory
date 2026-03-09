@@ -1,0 +1,8 @@
+name: <job_name>
+schedule: "FREQ=DAILY;BYHOUR=2"  # Oracle Scheduler Syntax
+description: ""
+calls_scripts:
+  - script_name_1
+  - script_name_2
+migration_status: pending
+notes: ""

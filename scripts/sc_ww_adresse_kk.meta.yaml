@@ -1,0 +1,62 @@
+job_name: sc_ww_adresse_kk
+description: "Laedt Kernkunden-Adressdaten aus der Stage-Backup-Tabelle st_ww_adresse_kk_b in die Source-Core-Cleansing-Tabellen. Trennt Neuanlage/Update (N/U) von Loeschsaetzen (D). Fuehrt Referenzaufloesung gegen sc_ww_land durch und schreibt aufgeloeste Saetze in clsc_ww_adresse_kk, unaufgeloeste in clsc_ww_adresse_kk_e."
+type: script
+created_at: "xx.04.2015"
+created_by: "Stefan Ernstberger"
+last_changed: "11.08.2021"
+last_changed_by: joeabd
+change_count: 4
+confluence_url: ""
+migration_status: pending
+
+target_table: sc_ww_adresse_kk
+
+cleanse_tables:
+  - clsc_ww_adresse_kk
+  - clsc_ww_adresse_kk_1
+  - clsc_ww_adresse_kk_d
+  - clsc_ww_adresse_kk_e
+
+source_tables:
+  - st_ww_adresse_kk_b
+
+lookup_tables:
+  - sc_ww_land
+
+db_links: []
+
+precondition_tables: []
+precondition_processes: []
+
+parameters:
+  - termin   # WHERE dwh_processdate = &termin
+  - gbvid    # dwh_cr_load_id = &gbvid
+
+packages:
+  - PKG_STATS.GATHERTABLE
+  - PKG_IM_LADUNG.P_SC_ERROR_HANDLING
+
+sections:
+  - id: "PARAM"
+    description: "Ausgabe der Parameter: Prozessdatum (&termin) und GBV-Job-ID (&gbvid)"
+  - id: "1"
+    description: "Source Core-Ladung – Endtabellen sc_ww_adresse_kk / sc_ww_adresse_kk_ver"
+  - id: "1.1"
+    description: "Cleansing-Tabellen leeren: TRUNCATE clsc_ww_adresse_kk, clsc_ww_adresse_kk_1, clsc_ww_adresse_kk_d"
+  - id: "1.2"
+    description: "Daten aus st_ww_adresse_kk_b -> clsc_ww_adresse_kk_1 (N/U) / clsc_ww_adresse_kk_d (D)"
+  - id: "1.3"
+    description: "Statistiken: PKG_STATS.GATHERTABLE fuer clsc_ww_adresse_kk_1, clsc_ww_adresse_kk_d"
+  - id: "1.4"
+    description: "Error Handling: PKG_IM_LADUNG.P_SC_ERROR_HANDLING fuer clsc_ww_adresse_kk / id"
+  - id: "1.5"
+    description: "Referenzaufloesung gegen sc_ww_land: aufgeloeste Saetze -> clsc_ww_adresse_kk, unaufgeloeste -> clsc_ww_adresse_kk_e"
+  - id: "1.6"
+    description: "Statistiken: PKG_STATS.GATHERTABLE fuer clsc_ww_adresse_kk, clsc_ww_adresse_kk_e"
+
+notes: |
+  - Unsicherheit: Header nennt sc_ww_adresse_kk und sc_ww_adresse_kk_ver als Endtabellen, aber der Code
+    schreibt nur in clsc_ww_adresse_kk*. Uebernahme durch nachgelagerten Prozess (nicht sichtbar).
+  - 11.08.2021 (joeabd): DSGVO-Loeschvorgaben integriert; Abbildung vermutlich ueber D-Flag.
+  - Keine DB-Links, keine GBV_BATCH_JOB-Preconditions.
+  - ALTER SESSION ENABLE PARALLEL DML aktiv.

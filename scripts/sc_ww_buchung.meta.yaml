@@ -1,0 +1,83 @@
+job_name: sc_ww_buchung
+description: "Laedt Kundenumsatzdaten (Buchungen) aus der Stage-Backup-Tabelle in
+  die Source-Core-Tabelle sc_ww_buchung. Zwischenstufe ueber Cleanse-Tabellen mit
+  anschliessender Referenzaufloesung gegen SC-Kennzeichentabellen. Fehlgeschlagene
+  Referenzaufloesungen landen in der Error-Tabelle clsc_ww_buchung_e; ein PL/SQL-Block
+  prueft, dass der Fehleranteil 3 % nicht ueberschreitet."
+type: script
+created_at: "2013-09-13"
+created_by: "joeabd"
+last_changed: "2025-03-12"
+last_changed_by: "annfis"
+change_count: 18
+confluence_url: "https://confluence.witt-gruppe.eu/display/IM/Buchung"
+migration_status: pending
+
+target_table: kdwh.sc_ww_buchung
+
+cleanse_tables:
+  - clsc_ww_buchung
+  - clsc_ww_buchung_1
+
+source_tables:
+  - st_ww_buchung_b
+
+lookup_tables:
+  - sc_ww_kundenfirma
+  - sc_ww_kundenfirma_ver
+  - sc_ww_vertrgebiet
+  - sc_ww_vertrgebiet_ver
+  - sc_ww_likz
+  - sc_ww_zahlungskz
+  - sc_ww_lieferwukz
+  - sc_ww_mgeinh
+  - sc_ww_ersatzwunschkz
+  - sc_ww_valutakz
+  - sc_ww_zugesteuertkz
+  - sc_ww_steuerungskz
+  - sc_ww_sperrgrundkz
+  - sc_ww_stationaerkz
+  - sc_ww_kontoart
+  - sc_ww_kdumsverarbkz
+
+db_links: []
+
+precondition_tables: []
+precondition_processes: []
+
+parameters:
+  - gbvid    # GBV-Job-ID; wird als dwh_cr_load_id / dwh_up_load_id geschrieben
+  - termin   # Prozesstermin; Filter auf dwh_processdate und SCD2-Gueltigkeit
+
+packages:
+  - PKG_STATS.GATHERTABLE
+
+sections:
+  - id: "0"
+    description: "Parameter-Ausgabe: GBV-Job-ID und Prozesstermin via PROMPT"
+  - id: "1"
+    description: "Source Core-Ladung Endtabelle sc_ww_buchung (Hauptabschnitt)"
+  - id: "1.1"
+    description: "Cleansing-Tabellen leeren: TRUNCATE clsc_ww_buchung und clsc_ww_buchung_1"
+  - id: "1.2"
+    description: "Daten aus Stage-Backup-Tabelle st_ww_buchung_b laden (INSERT APPEND, gefiltert auf dwh_processdate = &termin)"
+  - id: "1.3"
+    description: "Tabellenstatistiken fuer clsc_ww_buchung_1 via PKG_STATS.GATHERTABLE"
+  - id: "1.4"
+    description: "Error-Handling (Platzhalter; laut Kommentar noch nicht implementiert)"
+  - id: "1.5"
+    description: "INSERT ALL mit Referenzaufloesung: Fehler-Saetze nach clsc_ww_buchung_e, korrekte Saetze nach clsc_ww_buchung. PL/SQL-Fehlerquotencheck (>3% -> RAISE_APPLICATION_ERROR -20029)"
+
+notes: |
+  - Die finale Endtabelle laut Header ist kdwh.sc_ww_buchung; im Script wird jedoch
+    nur clsc_ww_buchung befuellt. Uebernahme nach kdwh.sc_ww_buchung vermutlich
+    in einem Folge-Script. Unsicherheit: kein INSERT/MERGE auf kdwh.sc_ww_buchung sichtbar.
+  - clsc_ww_buchung_e ist eine Error-Tabelle fuer Saetze mit unaufgeloesten Referenzen.
+  - clsc_ww_buchung_1 ist Zwischenstufe: INSERT-Ziel (1.2) und SELECT-Quelle (1.5).
+  - DSGVO (08.11.2023 benlin): Spalten KONTONR, KONTO_ID, KUNDENNR_ORIG,
+    KONTO_ID_ORIG, AUFTRPOSIDENTNR, FAKTURAID ausgebaut (als SQL-Kommentare erhalten).
+  - ALTER SESSION ENABLE PARALLEL DML aktiv; INSERT mit /*+APPEND*/ Hint.
+  - sc_ww_mgeinh, sc_ww_stationaerkz, sc_ww_kdumsverarbkz fehlen im Header-Kommentar,
+    sind aber im ausfuehrbaren Code als Lookup-JOINs vorhanden.
+  - dwh_id_sc_ww_auftragsartkz wird hartcodiert auf -3 gesetzt (toter Wert, Kandidat zum Entfernen).
+  - Keine DB-Links, keine GBV_BATCH_JOB-Vorbedingungen, kein Dynamic SQL.

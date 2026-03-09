@@ -1,0 +1,264 @@
+job: dm_f_ecat
+ziel_plattform: Databricks Lakehouse (Delta Lake)
+sst_fokus: WW   # &5=WW, &6=1
+script_version: "##.37 (2025-06-16)"
+
+# ─── ORCHESTRIERUNG ────────────────────────────────────────────────────────────
+orchestrierung:
+  gate_mapping:
+    A_exklusivitaet:
+      oracle: GBV_BATCH_JOB BAJ_IPAR_1=@JB()
+      databricks: max_concurrent_runs=1 im Job-Setting
+    B_buchung:
+      oracle: udwh_loadhistory CC_WW_BUCHUNG + LV-Tag
+      databricks: |
+        Task-Dependency CC_WW_BUCHUNG → dm_f_ecat
+        + Sensor-Task prüft pipeline_metadata.load_history
+        + LV-Tag Sensor → short-circuit wenn kein LV-Tag
+    C_kunde:
+      oracle: udwh_dh.udwh_loadhistory@DBL_LOADER() CC_WW_KUNDE + LV-Tag
+      databricks: |
+        Task-Dependency CC_WW_KUNDE → dm_f_ecat
+        DB-Link entfällt → gemeinsame Delta-Tabelle pipeline_metadata.load_history
+    D_sst_concurrency:
+      oracle: GBV_BATCH_JOB BAJ_IPAR_4=&6
+      databricks: Separate Job-Instanzen je SST → kein gemeinsamer Guard nötig
+
+# ─── DYNAMIC SQL (Step 2) ──────────────────────────────────────────────────────
+dynamic_sql_step2:
+  oracle: |
+    IF &datum >= DATE '2021-07-01':
+      shopanteiligkeit aus cc_kunde_{vtsaison}
+    ELSE:
+      shopanteiligkeit = -2
+  databricks: |
+    OPTION A – Parameter-Branching:
+      if process_date >= date("2021-07-01"):
+          df = spark.sql("... shopanteiligkeit ...")
+      else:
+          df = spark.sql("... -2 AS shopanteiligkeit ...")
+    OPTION B – Einheitliche Query mit CASE:
+      CASE WHEN process_date >= '2021-07-01' THEN shopanteiligkeit ELSE -2 END
+    Empfehlung: Option B (einfacher, ein Code-Pfad)
+
+# ─── AUFTRAEGE-VERTEILUNG ─────────────────────────────────────────────────────
+auftraege_verteilung:
+  oracle_logik: |
+    Step 1: auftraege = 1/SUM(ansprmenge) per (auftrnr, konto, buchdat)
+            meterware=2 → SIGN(ansprmenge) statt ansprmenge
+    Step 3: auftraege = k.auftraege * ansprmenge  (verteilt auf Positionsebene)
+  databricks: |
+    Step 1 als Window-Funktion:
+      auftraege = 1.0 / SUM(CASE WHEN meterware=2 THEN SIGN(ansprmenge)
+                                 ELSE ansprmenge END)
+                  OVER (PARTITION BY auftrnr_key, konto_id_key, buchdat)
+    Step 3: JOIN auf _1, dann auftraege * ansprmenge
+
+# ─── DOPPELSCHREIBER _3 ───────────────────────────────────────────────────────
+doppelschreiber_step3:
+  risiko: HOCH
+  oracle_ablauf: |
+    1. Step 3a: INSERT Buchungsdaten (attr-Felder = NULL)
+    2. Step 5.1: Attribution laden
+    3. Step 5.2: Attributionswerte berechnen (_6)
+    4. Step 3b: INSERT neue Zeilen mit allen Kennzahlen=0, nur attr befüllt
+    → _3 enthält danach: reguläre Zeilen + Attribution-Zeilen
+    → Step 6 aggregiert ALLES zusammen (SUM)
+
+  databricks_empfehlung:
+    option_1_union:
+      beschreibung: |
+        _3 = UNION ALL von _3a und _3b als separate DataFrames
+        → ein atomarer Write in Delta-Tabelle _3
+        Dann _7 = GROUP BY + SUM über _3
+      vorteil: Sauber, kein Append-Problem
+      empfehlung: JA
+
+    option_2_separate_tabellen:
+      beschreibung: _3_basis (3a) und _3_attr (3b) → _7 = UNION + GROUP
+      vorteil: Explizit, gut testbar
+      nachteil: Mehr Tabellen
+
+    option_3_flag_spalte:
+      beschreibung: _3 mit source_pass IN ('basis','attr')
+      nachteil: Komplexer downstream
+
+    empfehlung: option_1_union
+
+# ─── ATTRIBUTION (Steps 5.1/5.2/3b) ─────────────────────────────────────────
+attribution:
+  oracle_logik: |
+    Nur Internet-Aufträge (auftrart=4) werden attribuiert.
+    cc_snow_attribution.factor_percent bestimmt Anteil.
+    Aktuelle Saison + Altdaten vor Saisonanfang (separater Insert).
+    Retoure: konto_id_key kann sich ändern → eigener INSERT.
+
+  neue_kennzahlen:
+    - ansprwert_attr:  "factor_percent * ansprohnerabattwert"
+    - numswert_attr:   "factor_percent * numsohnerabattwert"
+    - auftraege_attr:  "k.auftraege * ansprmenge * factor_percent"
+
+  databricks: |
+    Step 5.1:
+      # Insert 1 – aktuelle Saison
+      df_attr_curr = cc_snow_attribution
+          .join(cc_bestellkanal_akt_v, on="ecc")
+          .filter(col("auftrart")==4)
+          .filter(date_add(col("auftrdat"),1).between(hjanfang, datum))
+
+      # Insert 2 – Altdaten (auftrnr_key in _3)
+      df_attr_hist = cc_snow_attribution
+          .join(cc_bestellkanal_akt_v, on="ecc")
+          .filter(col("auftrart")==4)
+          .filter(date_add(col("auftrdat"),1) < hjanfang)
+          .join(df_3.select("auftrnr_key","firma").distinct(),
+                on=["auftrnr_key","firma"])
+
+      df_5 = df_attr_curr.union(df_attr_hist)
+
+    Step 5.2 (zwei Fälle):
+      # Normalfall
+      df_6a = df_3.join(df_5, on=["auftrnr_key","konto_id_key"])
+      # Retoure (konto ändert sich)
+      df_6b = df_3.join(df_5, df_3.auftrnr_key==df_5.auftrnr_key)
+                  .filter(df_3.konto_id_key != df_5.konto_id_key)
+      df_6 = df_6a.union(df_6b)
+
+    Step 3b:
+      df_3b = df_6.join(df_3, on=["auftrnr_key","buchdatnr","auftrpos",
+                                    "art_id","promnr","firma"])
+                  .select([lit(0).alias(k) for k in kennzahlen]
+                          + [ansprwert_attr, numswert_attr, auftraege_attr]
+                          + kundendaten_from_ecat)
+
+# ─── BRUTTO/NETTO SPLIT ───────────────────────────────────────────────────────
+brutto_netto:
+  oracle: |
+    Brutto: ALLE Zeilen aus _7 (kein bruttonetto-Filter)
+    Netto:  WHERE bruttonetto IN (1, -3)
+  databricks: |
+    df_brutto = df_7.join(cc_firma, ...).join(df_4, ...)
+    df_netto  = df_brutto.filter(col("bruttonetto").isin(1, -3))
+    # Brutto zuerst schreiben, Netto als Filter davon ableiten
+    # → nur ein JOIN-Aufwand
+
+# ─── HISTORISCHE KORREKTUREN ─────────────────────────────────────────────────
+historische_korrekturen:
+  appinfo_bestellmedium:
+    oracle: "buchdatnr≤20200930 AND NOT IN(-3,-2) → -2"
+    databricks: |
+      CASE WHEN buchdatnr <= 20200930 AND appinfo NOT IN (-3,-2) THEN -2
+           ELSE appinfo END
+    hinweis: Stichtag 30.09.2020 = Einführungsdatum dieser Felder
+
+  heine_bestellkanal:
+    oracle: "firma∈(48-52) AND bestellkanal=-3 → IF auftrart=4 THEN 16 ELSE auftrart"
+    databricks: |
+      CASE WHEN firma BETWEEN 48 AND 52 AND bestellkanal = -3
+           THEN CASE WHEN auftrart = 4 THEN 16 ELSE auftrart END
+           ELSE bestellkanal END
+    hinweis: Heine-spezifische Altlast, ggf. prüfen ob noch relevant
+
+  shopanteiligkeit_vor_fs21:
+    oracle: "&datum < 2021-07-01 → -2"
+    hinweis: Für historische Daten (Neulade) muss Stichtag berücksichtigt werden
+
+# ─── WOCHENAGGREGATE (Step 9) ─────────────────────────────────────────────────
+wochenaggregate:
+  oracle: |
+    PL/SQL-Cursor iteriert über alle Witt-Wochen im Zeitraum.
+    Je Woche: INSERT + COMMIT.
+    Performance: sequenziell, viele Commits.
+
+  databricks: |
+    Kein Loop nötig – Spark kann alle Wochen in einem JOIN aggregieren:
+
+    # Wochenzuordnung per JOIN statt Cursor
+    df_wochen = spark.sql("""
+      SELECT DISTINCT witt_woche_id,
+             TO_NUMBER(TO_CHAR(witt_woche_start_tag,'YYYYMMDD')) AS start_tag,
+             TO_NUMBER(TO_CHAR(witt_woche_ende_tag,'YYYYMMDD'))  AS ende_tag,
+             witt_woche_ende_tag
+      FROM cc_kalender
+      WHERE tag_id BETWEEN {hjanfang_nr} AND {datum_nr}
+    """)
+
+    df_kwkum = (df_brutto
+        .join(df_wochen,
+              (df_brutto.buchdatnr >= df_wochen.start_tag) &
+              (df_brutto.buchdatnr <= df_wochen.ende_tag))
+        .join(cc_vtinfogrp, ...).join(cc_bestellkanal, ...) ...
+        .groupBy(group_cols)
+        .agg(sum("ansprmenge"), sum("ansprwert"), ...)
+    )
+  vorteil: Massiv schneller als sequenzieller Loop (Spark-Parallelismus)
+
+# ─── POSITIONEN (Step 7) ──────────────────────────────────────────────────────
+positionen:
+  oracle: |
+    anzeinzelpos = COUNT(DISTINCT artnr||'*'||artgr WHERE ansprmenge>0)
+    anzgesamtpos = COUNT(DISTINCT artnr||'*'||promnr||'*'||artgr||'*'||auftrpos WHERE ansprmenge>0)
+  databricks: |
+    from pyspark.sql.functions import countDistinct, when, concat_ws
+
+    df_4 = (df_3
+        .groupBy("auftrnr_key","artnr","artgr")
+        .agg(
+          countDistinct(when(col("ansprmenge")>0, concat_ws("*","artnr","artgr")))
+              .alias("anzeinzelpos"),
+          countDistinct(when(col("ansprmenge")>0,
+                             concat_ws("*","artnr","promnr","artgr","auftrpos")))
+              .alias("anzgesamtpos")
+        ))
+
+# ─── IDEMPOTENZ ───────────────────────────────────────────────────────────────
+idempotenz:
+  oracle_muster: Subpartition TRUNCATE + INSERT (kein MERGE, kein DELETE)
+  delta_brutto_netto: |
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode","dynamic")
+    df_brutto.write.format("delta")
+        .mode("overwrite")
+        .partitionBy("year_month","firmabez")
+        .save("dm_f_ecat_brutto")
+    # year_month = SUBSTR(buchdatnr,1,6)
+  delta_kwkum: |
+    df_kwkum.write.format("delta")
+        .mode("overwrite")
+        .partitionBy("wittwochenr","firmabez")
+        .save("dm_f_ecat_kwkum_brutto")
+
+# ─── LOADHISTORY / METADATEN ─────────────────────────────────────────────────
+loadhistory:
+  oracle: PKG_IM_LADUNG.P_LOADHISTORY schreibt in udwh_loadhistory
+  ziel_schema: |
+    pipeline_metadata.load_history:
+      run_id        STRING     -- Databricks run_id
+      pipeline      STRING     -- 'dm_f_ecat'
+      sst_kuerzel   STRING     -- WW/FR/US
+      process_date  DATE       -- &datum
+      status        STRING     -- SUCCESS/FAILED
+      row_count     BIGINT
+      loaded_at     TIMESTAMP
+  ersetzt: udwh_loadhistory + @DBL_LOADER()-DB-Link vollständig
+
+# ─── OFFENE MIGRATIONSFRAGEN ──────────────────────────────────────────────────
+open_migration_questions:
+  - frage: cc_snow_attribution Upstream-Job?
+    auswirkung: Sensor-Task im DAG erforderlich oder nicht?
+    priorität: HOCH
+
+  - frage: bruttonetto=2 – fachliche Bedeutung?
+    auswirkung: Validierungsregel für Netto-Tabelle (Zählkontrolle Brutto vs. Netto)
+    priorität: HOCH
+
+  - frage: limango – auskommentierte DELETEs reaktivieren?
+    auswirkung: Wenn limango in SST ist, fehlen Löschungen in allen 4 Zieltabellen
+    priorität: MITTEL
+
+  - frage: Downstream-Konsumenten der vier Zieltabellen?
+    auswirkung: Schema-Vertrag, SLA, Power-BI-Kompatibilität
+    priorität: MITTEL
+
+  - frage: Historische Datenmigration – welcher Zeitraum?
+    auswirkung: shopanteiligkeit-Stichtag, appinfo/bestellmedium-Stichtag beachten
+    priorität: MITTEL

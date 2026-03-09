@@ -1,0 +1,238 @@
+job_name: cc_ww_buchung
+description: "Laedt Stammgeschäfts-Buchungsdaten ins Common Core (cc_buchung)"
+created_at: "2013-10-10"
+created_by: "Jörg Abdinghoff, Thomas Weiß"
+last_changed: "2026-02-25"
+last_changed_by: steern
+change_count: 117
+confluence_url: "https://confluence.witt-gruppe.eu/display/IM/Buchung"
+
+target_table: cc_buchung
+
+cleanse_tables:
+  - clcc_ww_buchung_19   # Haupt-Staging (alle Tagesdaten)
+  - clcc_ww_buchung_01   # Ansprachebuchungen (Ausstattungs-ID)
+  - clcc_ww_buchung_02   # Ausstattungs-Hilfstabelle (cc_ausstattung_dir × Buchung)
+  - clcc_ww_buchung_03   # MIN Ausstattungs-ID je Folgebuchung
+  - clcc_ww_buchung_04   # Ausstattungs-Hilfstabelle (Auszug cc_ausstattung_dir)
+  - clcc_ww_buchung_05   # Ersatzlieferung-Lookup
+  - clcc_ww_buchung_06   # AYC-Rückwirkung (letzte 14 Tage)
+  - clcc_ww_buchung_09   # Auftragskopf-Daten
+  - clcc_ww_buchung_10   # Auftragspos-Daten
+  - clcc_ww_buchung_11   # Auftragspos (Storno, Zugesteuertkz)
+  - clcc_ww_buchung_12   # Auftragspos (Bestarprom)
+  - clcc_ww_buchung_13   # Bestellzähler (kumuliert)
+  - clcc_ww_buchung_14   # Folgebuchungen aus cc_buchung (Ausstattungs-ID)
+  - clcc_ww_buchung_15   # Bestelldatum_LV (auftrdatlv)
+  - clcc_ww_buchung_21   # Ersatzlieferung-Katalogart Lookup (Teil 1)
+  - clcc_ww_buchung_22   # Ersatzlieferung-Katalogart Lookup (Teil 2)
+  - clcc_ww_buchung_23   # Bestellzähler-Referenz (→ sc_bestellzaehler im Abschluss)
+  - clcc_ww_buchung_29   # Auftragpool-Daten (Zahlart, Positionsstatus)
+  - clcc_ww_buchung      # Finale Cleanse-Tabelle → Quelle für Abschluss-Script
+
+source_tables:
+  # SC-Schnittstelle (Tagesdaten)
+  - sc_ww_buchung
+  - sc_ww_kundenfirma
+  - sc_ww_kundenfirma_ver
+  - sc_ww_likz
+  - sc_ww_likz_ver
+  - sc_ww_zahlungskz
+  - sc_ww_zahlungskz_ver
+  - sc_ww_mgeinh
+  - sc_ww_mgeinh_ver
+  - sc_ww_stationaerkz
+  - sc_ww_stationaerkz_ver
+  - sc_ww_auftragkopf_ver
+  - sc_ww_auftragpos_ver
+  - sc_ww_ersatzwunschkz
+  - sc_ww_ersatzwunsch_ver
+  - sc_ww_auftrstornokz
+  - sc_ww_auftrstornokz_ver
+  - sc_ww_alfa_ersatzart
+  - sc_ww_alfa_ersatzart_ver
+  - sc_ww_lieferwunsch
+  - sc_ww_lieferwunsch_ver
+  - sc_ww_zahlmethode_ver
+  - sc_ww_zahlwunsch_ver
+  - sc_ww_steuerungskz
+  - sc_ww_steuerungskz_ver
+  - sc_ww_sperrgrundkz
+  - sc_ww_sperrgrundkz_ver
+  - sc_ww_valutakz
+  - sc_ww_valutakz_ver
+  - sc_ww_vertrgebiet_ver
+  - sc_ww_zugestartartkz
+  - sc_ww_zugestartartkz_ver
+  - sc_ww_retbeweg
+  - sc_ww_retbeweg_ver
+  - sc_ww_intabwicklkto
+  - sc_ww_intabwicklkto_ver
+  - sc_ww_interessent
+  - sc_ww_interessent_ver
+  - sc_im_tgv_wkz_umcod_ver
+  - sc_bestellzaehler
+  # Rückzugriff auf Zieltabelle für Altdaten
+  - cc_buchung
+
+lookup_tables:
+  - cc_firma
+  - cc_firma_akt_v
+  - cc_artstat
+  - cc_zahlwunsch
+  - cc_meterware
+  - cc_stationaerkz
+  - cc_ratenwunsch
+  - cc_lvsteuerung
+  - cc_sperrgrund
+  - cc_valuta
+  - cc_ersart
+  - cc_katart
+  - cc_art
+  - cc_ausstattung_dir
+  - cc_auftrstorno
+  - cc_marktkz
+  - cc_obermarktkz
+  - cc_anlauftrart
+  - cc_liefwunsch
+  - cc_artgr_akt_v
+  - cc_artpreisvt_akt_v
+  - cc_artgrpreisvt_akt_v
+  - cc_promvthauptversion_akt_v
+  - cc_promgrvt_akt_v
+
+db_links: []   # keine DB-Links im Script (Abschluss-Script ggf. prüfen)
+
+precondition_tables:
+  - GBV_BATCH_JOB        # Gate A: Exklusivität (kein paralleler Lauf)
+  - udwh_loadhistory     # Gate B: CC_WW_BUCHUNG Erfolg
+
+precondition_processes:
+  - CC_WW_BUCHUNG        # Gate B: liefert sc_ww_buchung
+  - SC_WW_AUFTRAG        # Unsicherheit: sc_ww_auftragkopf_ver / auftragpos_ver upstream?
+
+parameters:
+  - termin        # Prozessdatum; Filter auf dwh_processdate
+  - gbvid         # Run-ID → dwh_cr_load_id
+  - vtsaison      # Aktuelle VT-Saison (z.B. 103)
+  - vtsaisonm1    # VT-Saison - 1
+  - vtsaisonm2    # VT-Saison - 2
+  - vtsaisonp1    # VT-Saison + 1
+
+packages:
+  - PKG_IM_VERTRIEBSGEBIET   # Währungsumrechnung + VTG-Auflösung (Kernpaket)
+  - PKG_STATS                # Tabellenstatistiken sammeln
+
+sections:
+  - id: "1.1"
+    description: "Einspielen aus SC-Tabelle – normale Konten (ohne Sammelkonten, ohne Russland)"
+  - id: "1.2"
+    description: "Einspielen aus SC-Tabelle – Sammelkonten"
+  - id: "1.3"
+    description: "OhneRabattWerte für Sammelkonten nachfüllen (vkp_fakt immer leer)"
+  - id: "2"
+    description: "Firmenkennzeichen Cross-Selling aktualisieren (Otto Marktplatz nicht überschreiben)"
+  - id: "3.1"
+    description: "VFKZ setzen – Nicht-Sammelkonten über VKP_FAKT + CC_ART + CC_MARKTKZ"
+  - id: "3.2"
+    description: "VFKZ setzen – Sammelkonten über VKP/VERKPREIS"
+  - id: "3.3"
+    description: "VFKZ = 0 für normale Artikel (Rest)"
+  - id: "3.4"
+    description: "VFKZ 4 (Katalog) über KT-Warengruppe 73.6 setzen"
+  - id: "4"
+    description: "Firma auf CC-Referenz umcodieren (2x MERGE)"
+  - id: "5"
+    description: "Ersatzartikelnr über alle Positionen einer Auftragsposition propagieren"
+  - id: "6.1"
+    description: "Ausstattungs-ID: Ansprachebuchungen → clcc_ww_buchung_01"
+  - id: "6.2"
+    description: "Ausstattungs-Hilfstabellen erstellen (_04, _02)"
+  - id: "6.3"
+    description: "Ausstattungs-ID für Ansprachebuchungen in _19 setzen (MIN bei Mehrdeutigkeit)"
+  - id: "6.4"
+    description: "Folgebuchungen aus cc_buchung → clcc_ww_buchung_14"
+  - id: "6.5"
+    description: "Pos-400-Buchungen in _14 ergänzen"
+  - id: "6.6"
+    description: "auftrpos_org setzen für späteren Join"
+  - id: "6.7"
+    description: "Ausstattungs-ID aus Original-Position in _14 übernehmen"
+  - id: "6.8"
+    description: "Ausstattungs-ID für Folgebuchungen via _03 → MERGE in _19"
+  - id: "7"
+    description: "Ersatzlieferung (erslief) für Folgebuchungen setzen"
+  - id: "8.1"
+    description: "ART-ID berechnen: umsatzsaison||artnr (Normal) vs. saison||artnr (Ersatzlieferung)"
+  - id: "8.2"
+    description: "ART-ID auf 0 setzen wenn nicht in cc_art vorhanden"
+  - id: "9.1.1"
+    description: "Auftragskopf-Daten übernehmen und Referenzauflösung → _09"
+  - id: "9.1.2"
+    description: "Stationär: auftragsart_cc = 7 (fix)"
+  - id: "9.1.3"
+    description: "Otto Marktplatz/Limango (28,200,201,202): auftragsart_cc = 4 (Internet)"
+  - id: "9.1.4"
+    description: "Heine Übergangslösung: auftragsart_cc aus cc_buchung für Retour-Altaufträge"
+  - id: "9.2.1"
+    description: "Auftragspos-Daten übernehmen → _10"
+  - id: "9.2.2"
+    description: "Alfa-Ersatzart-ID auflösen"
+  - id: "9.2.3"
+    description: "Auftragspos-Daten in _19 zurückspielen"
+  - id: "9.2.4"
+    description: "Bestarprom aus SC nachbauen und abgleichen"
+  - id: "9.2.5"
+    description: "Umcodierung Auftrstorno und Zugesteuertkz auf DWH-Referenz"
+  - id: "9.2.6"
+    description: "Auftragsdaten über Auftragsposidentnr (11-stellig) setzen"
+  - id: "10.1"
+    description: "Bestellzähler: Temporärtabelle mit minimalen Auftragsdatumswerten"
+  - id: "10.2"
+    description: "Kundenaufträge sortieren + alten Bestellzähler ergänzen"
+  - id: "10.3"
+    description: "Bestellzähler addieren (Kumulierung)"
+  - id: "10.4"
+    description: "Referenztabelle _23 für Abschluss-Script (→ sc_bestellzaehler) ergänzen"
+  - id: "10.5"
+    description: "Bestellzähler in _19 setzen"
+  - id: "11"
+    description: "Bestelldatum_LV (auftrdatlv) setzen"
+  - id: "12.1"
+    description: "Ursprungskatalogart: normale Buchungen direkt übernehmen"
+  - id: "12.2"
+    description: "Ursprungskatalogart: Ersatzlieferungen aus cc_buchung (Altdaten bis Prozessdatum-1)"
+  - id: "12.3"
+    description: "Ursprungskatalogart: Ersatzlieferungen aus Tagestabelle _19 (Fallback)"
+  - id: "13"
+    description: "Vertriebsgebiet referenzauflösen (Otto Marktplatz VTG aus Firma)"
+  - id: "14"
+    description: "Auftragpool-Daten ermitteln (Zahlart, Positionsstatus) → _29"
+  - id: "15"
+    description: "Naligrund auf Basis Positionsstatus setzen"
+  - id: "16"
+    description: "Retourenerfassungsdatum (reterfdat) aus sc_ww_retbeweg einmergen"
+  - id: "17"
+    description: "Auftragsstornokz auf Basis Positionsstatus setzen (seit Hostmig)"
+  - id: "18"
+    description: "Steuerungskz + Sperrgrundkz auf Basis Positionsstatus setzen"
+  - id: "19"
+    description: "Valutakz auf Basis Zahlmethode_cc setzen"
+  - id: "20"
+    description: "ECC auf Basis Mailnr ermitteln (nur Internet-Aufträge)"
+  - id: "21"
+    description: "Bestellkanal ermitteln"
+  - id: "22"
+    description: "Referenzauflösung Katalogart"
+  - id: "23"
+    description: "AYC-Daten einmergen (About You Cloud) + rückwirkend in cc_buchung (14 Tage)"
+  - id: "24"
+    description: "BestellkanalPaid ermitteln"
+  - id: "25"
+    description: "Stationär-Retouren-Korrektur (Witt Inland → zurück auf Stationär)"
+  - id: "26"
+    description: "Auftrdat auf buchdat-1 setzen wenn leer (nur Otto Marktplatz)"
+  - id: "27a"
+    description: "PayBack-Kennzeichen setzen (firma=1 → 1, sonst -3)"
+  - id: "27b"
+    description: "Finales INSERT in clcc_ww_buchung + Data Loss Check"

@@ -1,0 +1,329 @@
+job_name: cc_ww_kunde
+description: "Job laedt Kundedaten in die cc_kunde. Taeglich inkrementeller Delta-Lauf: Stamm- und Bewegungsdaten aus SC_WW_*-Tabellen werden in bis zu 28 Cleanse-Schritten verdichtet, referenzaufgeloest und als Delta in clcc_ww_kunde geliefert (Endtabelle: cc_kunde_&vtsaison)."
+type: script
+
+created_at: "01.07.2019"
+created_by: "Stefan Ernstberger"
+last_changed: "30.12.2025"
+last_changed_by: steern
+change_count: 127
+
+confluence_url: ""
+
+migration_status: pending
+
+# Finale Zieltabelle (laut Script-Header)
+target_table: "cc_kunde_&vtsaison"
+
+# Cleanse-/Zwischentabellen (alle TRUNCATE TABLE im ausführbaren Code)
+cleanse_tables:
+  - clcc_ww_kunde_1
+  - clcc_ww_kunde_2
+  - clcc_ww_kunde_2_d
+  - clcc_ww_kunde_3
+  - clcc_ww_kunde_4
+  - clcc_ww_kunde_5
+  - clcc_ww_kunde_6
+  - clcc_ww_kunde_7
+  - clcc_ww_kunde_8
+  - clcc_ww_kunde_11
+  - clcc_ww_kunde_16
+  - clcc_ww_kunde_18
+  - clcc_ww_kunde_19
+  - clcc_ww_kunde_20
+  - clcc_ww_kunde_22
+  - clcc_ww_kunde_24
+  - clcc_ww_kunde_25
+  - clcc_ww_kunde          # letzter Delta-Puffer (Step 28, wird in Endtabelle gemergt)
+
+# Quell-Tabellen (SC_*, DM_*, externe SC_EX_/SC_IM_) – nur aus ausführbarem Code
+source_tables:
+  # Kern-Kundenstamm (versioniert)
+  - sc_ww_kunde
+  - sc_ww_kunde_ver
+  - sc_ww_person
+  - sc_ww_person_ver
+  - sc_ww_adresse
+  - sc_ww_adresse_ver
+  - sc_ww_adr
+  - sc_ww_adr_ver
+  - sc_ww_kdkto
+  - sc_ww_kdkto_ver
+  - sc_ww_kundenfirma
+  - sc_ww_kundenfirma_ver
+  # Attribut-/Kennzeichen-Tabellen (versioniert)
+  - sc_ww_adrhdl
+  - sc_ww_adrhdl_ver
+  - sc_ww_persanrede
+  - sc_ww_persanrede_ver
+  - sc_ww_land
+  - sc_ww_land_ver
+  - sc_ww_kdart
+  - sc_ww_kdart_ver
+  - sc_ww_verswunsch
+  - sc_ww_verswunsch_ver
+  - sc_ww_telemk
+  - sc_ww_telemk_ver
+  - sc_ww_werbmit
+  - sc_ww_werbmit_ver
+  - sc_ww_mahneb
+  - sc_ww_mahneb_ver
+  - sc_ww_mahnstrang
+  - sc_ww_mahnstrang_ver
+  - sc_ww_bonikl
+  - sc_ww_bonikl_ver
+  - sc_ww_ersatzart
+  - sc_ww_ersatzart_ver
+  - sc_ww_nachbarschabg
+  - sc_ww_nachbarschabg_ver
+  - sc_ww_nladressherkunft
+  - sc_ww_nladressherkunft_ver
+  - sc_ww_nltyp
+  - sc_ww_nltyp_ver
+  - sc_ww_emailverweigert
+  - sc_ww_emailverweigert_ver
+  - sc_ww_rufnummerverweigert
+  - sc_ww_rufnummerverweigert_ver
+  # Sprachen-FUP
+  - sc_fu_sprachkennzeichen
+  - sc_fu_sprachkennzeichen_ver
+  - sc_ww_sprache_ver
+  # TGV-Tabellen (Gewinnungsweg / NK0)
+  - sc_im_tgv_nk0_ver
+  - sc_im_tgv_gewweg_ver
+  # Externe Schnittstelle (AWS / OneTrust NL-Abo)
+  - sc_ex_aws_nlabostatusdaten
+  # DM-Quelle (Alina)
+  - dm_f_alinav1
+  # Bewegungsdaten (Buchungen) – als Quelle für Kennzahlen und Anlweg
+  - cc_buchung
+  # Vorperioden-Kundenstamm (Delta-Basis)
+  - "cc_kunde_&vtsaison"
+  - "cc_kunde_&vtsaisonm1"
+
+# Lookup-/Referenz-Tabellen (CC_* für Codeauflösung)
+lookup_tables:
+  - cc_adresshdl
+  - cc_altjung
+  - cc_altwabherkunft
+  - cc_anlauftrart
+  - cc_anlaktionscode
+  - cc_anlaktionscoderea
+  - cc_anlvtsaison
+  - cc_anlvtsaisonrea
+  - cc_anrede
+  - cc_art_akt_v
+  - cc_auftrart
+  - cc_bonikl
+  - cc_creationlpremium
+  - cc_datenschutzkonto
+  - cc_eigenfremdkauf
+  - cc_emailherkunft
+  - cc_emailverweigert
+  - cc_emailvorhanden
+  - cc_ersartwunsch
+  - cc_erslief
+  - cc_etberkt_akt_v
+  - cc_fgaktiv
+  - cc_fg
+  - cc_filialwerbungwunsch
+  - cc_firma_akt_v
+  - cc_firma_waepumig_v       # Übergangs-View: Wäschepur-Firmenzuordnung (SG 18/68), solange alte Welt noch aktiv
+  - cc_gebdatverweigert
+  - cc_imaltwabherkunft
+  - cc_kantoneschweiz_akt_v
+  - cc_katart
+  - cc_katart_akt_v
+  - cc_kdart
+  - cc_kdloginaktiv
+  - cc_kontoart
+  - cc_kontosperre
+  - cc_land
+  - cc_land_akt_v
+  - cc_mahnebene
+  - cc_mahnstrang
+  - cc_marktkz_akt_v
+  - cc_mehrlinien
+  - cc_mobilnrvorhanden
+  - cc_nachbarabg
+  - cc_nixi
+  - cc_nkcodierung
+  - cc_nlabostatus
+  - cc_nltyp
+  - cc_nlwunsch
+  - cc_obermarktkz_akt_v
+  - cc_onlinetest
+  - cc_ostwest
+  - cc_ostwest_akt_v
+  - cc_plzref
+  - cc_postfach
+  - cc_region
+  - cc_rufnummerverweigert
+  - cc_serviceinforechnungversand
+  - cc_servicemailaktiv
+  - cc_sheego_ausschlusse_modalwert
+  - cc_sheego_dob_groessen_ref
+  - cc_shopanteiligkeit
+  - cc_sprache
+  - cc_telefonvorhanden
+  - cc_telemarkwunsch
+  - cc_ueberschneider
+  - cc_vfart
+  - cc_vorteilsnrangabe
+  - cc_vtinfogrp
+  - cc_vtinfogrp_akt_v
+  - cc_vtinfogrpstationaer      # Unsicherheit: wird als Alias auf cc_vtinfogrp gejoined, kein eigener Tabellenname
+  - cc_vtsaison
+  - cc_werbemittelsperre
+  - cc_zustelldienst
+
+# DB-Links
+db_links:
+  - "@udwh"   # Verwendet in: cc_nlabostatus@udwh (Step 7, NL-Abostatus-Aufloesung)
+
+# Preconditions
+precondition_tables: []
+precondition_processes: []
+# Hinweis: Kein GBV_BATCH_JOB / udwh_loadhistory-Block im ausführbaren Code gefunden.
+# Preconditions werden offenbar ausserhalb dieses Scripts gesteuert (GBV-Scheduler).
+
+# Script-Parameter
+parameters:
+  - termin        # Prozessdatum 24h (Zeitfilter für SCD-Joins)
+  - datum         # Ladedatum
+  - hjanfang      # Saisonanfangsdatum
+  - hjende        # Saisonendedatum
+  - hjanfangm6    # Saisonanfangsdatum -6 Saisons
+  - vtsaison      # Aktuelle Saison (z.B. HS25)
+  - vtsaisonm1    # Saison -1
+  - vtsaisonp1    # Saison +1
+  - gbvid         # GBV-Lauf-ID
+  - terminm1      # Prozessdatum -1 24h
+
+# Packages / Funktionen
+packages:
+  - PKG_STATS.GATHERTABLE          # Statistiken auf Cleanse-Tabellen (nach jedem größeren Schritt)
+  - PKG_IM_ZEIT.F_VTSAISON_IN_EKSAISON  # Saison-Konvertierung (Step 14, Gewinnungswegcodierung)
+  - F_GET_LAST_LVDAT               # Letztes Ladedatum ermitteln (Step 3.5, AWS-NL-Abo-Filter)
+
+# Script-Abschnitte (aus PROMPT-Markierungen)
+sections:
+  - id: "1"
+    description: "Join aus Kundentabellen als Basis → clcc_ww_kunde_1"
+  - id: "2"
+    description: "Referenztabellen joinen, Spalten umbenennen → clcc_ww_kunde_2"
+  - id: "2.1"
+    description: "Statistiken und Index auf clcc_ww_kunde_2"
+  - id: "2.2"
+    description: "Kopie der ext. SST (sc_ex_aws_nlabostatusdaten) auf UDWH erstellen → clcc_ww_kunde_24"
+  - id: "2.3"
+    description: "Hilfstabelle mit allen Kunden mit tagesaktuellen Bewegungsdaten → clcc_ww_kunde_3"
+  - id: "3"
+    description: "Aenderungsdatensaetze aus allen Quellen sammeln → clcc_ww_kunde_4"
+  - id: "3.1"
+    description: "Kunden mit geaenderten Stammdaten (cc_kunde_&vtsaison)"
+  - id: "3.2"
+    description: "Kunden mit aktuellen Bewegungsdaten aus cc_buchung (z.B. ansprwert)"
+  - id: "3.3"
+    description: "Kunden mit geaenderten Attributen durch externe Prozesse"
+  - id: "3.4"
+    description: "Kunden aus Alina (dm_f_alinav1) hinzufuegen"
+  - id: "3.5"
+    description: "Kunden aus OneTrust (sc_ex_aws_nlabostatusdaten) hinzufuegen"
+  - id: "3.6"
+    description: "Kunden aus Sprachen-FUP (sc_fu_sprachkennzeichen) hinzufuegen"
+  - id: "3.7"
+    description: "anldatum (bbw > 0) und anldatum-lv setzen"
+  - id: "3.8"
+    description: "Statistiken erstellen und Indizes aufbauen auf clcc_ww_kunde_4"
+  - id: "3.9"
+    description: "Temporaere Buchungsview erstellen → clcc_ww_kunde_8"
+  - id: "4"
+    description: "Updates auf Basis der Vortageskunde (cc_kunde_&vtsaison) → clcc_ww_kunde_4"
+  - id: "5"
+    description: "Anlweg updaten fuer Neukunden mit Buchung aus cc_buchung → clcc_ww_kunde_11"
+  - id: "6"
+    description: "Vtgebiet/Bundesland aus PLZ updaten (cc_plzref)"
+  - id: "7"
+    description: "Newsletter-Abostatus setzen von OneTrust; Anlaufdatum setzen"
+  - id: "7.1"
+    description: "Initiales/Erstes Newsletter-Anlaufdatum setzen"
+  - id: "8"
+    description: "Statistiken erstellen"
+  - id: "9"
+    description: "Kennzahlen aus Buchung errechnen"
+  - id: "9.1"
+    description: "bbw, nums, ret, anzbest, datletztebest setzen"
+  - id: "9.2"
+    description: "Wenn Datum noch immer leer: auf anldatum setzen"
+  - id: "9.3"
+    description: "Liegt Datum vor anlaufdatum? → auf Anlaufdatum setzen"
+  - id: "9.4"
+    description: "Lebensanzahl Bestellungen IM, lbbw und lnums setzen"
+  - id: "10"
+    description: "WKZ/IWL setzen aus CC_NKCODIERUNG"
+  - id: "11"
+    description: "Externe Schnittstelle Updates durchfuehren"
+  - id: "12"
+    description: "Vtinfogruppe setzen"
+  - id: "12.1"
+    description: "Sonderumcodierungen Vtinfogruppe"
+  - id: "12.2"
+    description: "Vtinfogruppe nach Kundentyp setzen (NK-0, NK-1b, Sonderfaelle)"
+  - id: "12.3"
+    description: "Kunden ohne Vtinfogruppe"
+  - id: "12.4"
+    description: "Vtinfogruppe fuer Stationaerkunden (nur Stationaerumsaetze)"
+  - id: "13"
+    description: "WKZ-Umcodierung"
+  - id: "13.1"
+    description: "Neuermittlung NK0-Kunden die umcodiert wurden"
+  - id: "14"
+    description: "Gewinnungswegcodierung fuer Stammgeschaeft (sc_im_tgv_gewweg_ver, PKG_IM_ZEIT)"
+  - id: "15"
+    description: "Anlcode-Default setzen wenn aus CC_NKCODIERUNG nichts gefunden"
+  - id: "16"
+    description: "Test und Einladen der Daten in Haupttabelle → clcc_ww_kunde_16"
+  - id: "16.1"
+    description: "Test auf leeres altwabkz"
+  - id: "16.2"
+    description: "Abbildung der aktuellen Vtinfo-Systematik (inkl. Creation L Premium)"
+  - id: "19"
+    description: "altjung_akt ermitteln → clcc_ww_kunde_19 (mit dm_f_alinav1 MERGEs)"
+  - id: "20"
+    description: "online_test + shopanteiligkeit ermitteln → clcc_ww_kunde_20"
+  - id: "21"
+    description: "nettobrutto und vierlinien updaten"
+  - id: "22"
+    description: "Kontoart 5: keine vtinfogruppe, anlsaison, anldat ausweisen → clcc_ww_kunde_22"
+  - id: "23"
+    description: "Update der Sprache fuer Schweizer Firmen (DE/FR/IT-Katalog, cc_kantoneschweiz)"
+  - id: "24"
+    description: "FG-Kennzeichen setzen"
+  - id: "25"
+    description: "Modalwert/Imodalwert (praefartgrdobaktiv/praefartgrdobinaktiv) fuer Sheego"
+  - id: "26"
+    description: "Referenzaufloesung (finale INNER JOINs auf alle CC_-Referenztabellen) → clcc_ww_kunde_18"
+  - id: "27"
+    description: "Pruefung: verliert Referenzaufloesung Datensaetze?"
+  - id: "28"
+    description: "Letzte Cleanse-Tabelle fuellen → clcc_ww_kunde (Delta: clcc_ww_kunde_22 MINUS cc_kunde_&vtsaison)"
+
+notes: |
+  - Script hat 127 Change-Log-Eintraege (2016–2025); explizite ##.N-Nummerierung nur bis ##10, danach freitext.
+  - Erstellt-Datum im Header (01.07.2019) bezieht sich auf einen Rebuild/Neufassung; aelteste Aenderung ist 28.07.2016.
+  - Firmen-Ausschluesse im Basis-Join (Step 1): firma NOT IN (4,7,16,20,24,26,27,45,46,47).
+    Sheego (44) und Otto Marketplace (28) sind auskommentiert (koennen je Saison reaktiviert werden).
+  - cc_firma_waepumig_v ist eine Uebergangsloesung fuer die Wäschepur-Migration (SG 18 vs. 68).
+    Wenn alte Welt ausgestorben ist, kann auf cc_firma gewechselt werden.
+  - DB-Link @udwh: nur fuer cc_nlabostatus@udwh in Step 7 (NL-Abostatus-Aufloesung).
+  - F_GET_LAST_LVDAT: eingebaute Funktion (kein PKG_-Prefix), ermittelt letztes Ladedatum.
+  - clcc_ww_kunde (Step 28) ist der Delta-Puffer; der eigentliche MERGE in cc_kunde_&vtsaison
+    erfolgt vermutlich durch einen GBV-Scheduler-Step ausserhalb dieses Scripts.
+  - Unsicherheit: sc_ww_vertrgebiet_ver im Header erwaehnt, aber im ausfuehrbaren Code nicht gefunden
+    (moeglicherweise in einer frueheren Script-Version oder in einem anderen Job).
+  - Unsicherheit: sam_wp_mb_hist (Waeschepur-Historientabelle, ##5) nur im Header-Kommentar erwaehnt,
+    kein Vorkommen im ausfuehrbaren Code → vermutlich ausgebaut.
+  - Keine GBV_BATCH_JOB- oder udwh_loadhistory-Precondition-Bloecke im Script sichtbar.
+  - PARALLEL DML aktiviert (ALTER SESSION ENABLE PARALLEL DML) + /*+APPEND*/ / /*+parallel(N)*/ Hints.
+  - cc_nkcodierung liegt laut Kommentar (##, 07.08.2019) jetzt auf UDWH1 (kein DB-Link noetig).

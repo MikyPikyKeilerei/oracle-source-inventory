@@ -1,0 +1,103 @@
+job_name: sc_ww_kunde
+description: "Laedt Kundenstammdaten aus der Stage-Backup-Tabelle st_ww_kunde_b in die Cleanse-Schicht (clsc_ww_kunde*) mit anschliessender Referenzaufloesung auf 30 SC-Lookup-Tabellen. Verarbeitet Insert-, Update- und Delete-Saetze (dwh_stbflag N/U/D). Datensaetze mit fehlgeschlagener Referenzaufloesung werden in die Fehler-Tabelle clsc_ww_kunde_e ausgesteuert."
+type: script
+created_at: "xx.04.2016"
+created_by: "Stefan Ernstberger"
+last_changed: "11.07.2024"
+last_changed_by: steern
+change_count: 11
+confluence_url: ""
+migration_status: pending
+
+target_table: sc_ww_kunde
+
+cleanse_tables:
+  - clsc_ww_kunde       # finale INSERT-Ziel fuer gueltige Saetze
+  - clsc_ww_kunde_1     # Zwischenstufe N/U-Saetze aus Stage
+  - clsc_ww_kunde_d     # Zwischenstufe D-Saetze (Deletes)
+  - clsc_ww_kunde_e     # Error-Tabelle: Saetze mit fehlgeschlagener Referenzaufloesung
+
+source_tables:
+  - st_ww_kunde_b       # Stage-Backup-Tabelle; gefiltert auf dwh_processdate = &termin
+  - clsc_ww_kunde_1     # Zwischentabelle; Quelle fuer Referenzaufloesung in Abschnitt 1.5
+
+lookup_tables:
+  - sc_ww_person
+  - sc_ww_kdart
+  - sc_ww_bonikl
+  - sc_ww_mahneb
+  - sc_ww_mahnstrang
+  - sc_ww_beschaeftigung
+  - sc_ww_verswunsch
+  - sc_ww_werbmit
+  - sc_ww_ersatzart
+  - sc_ww_kundenfirma
+  - sc_ww_bonisperr
+  - sc_ww_kdsperr
+  - sc_ww_telemk
+  - sc_ww_nachbarschabg
+  - sc_ww_tddsg
+  - sc_ww_nltyp
+  - sc_ww_adreinw
+  - sc_ww_nladressherkunft
+  - sc_ww_servicemailaktiv
+  - sc_ww_katerstvers
+  - sc_ww_kdloginaktivkz
+  - sc_ww_kontosperre
+  - sc_ww_adrausvorteilsnr
+  - sc_ww_prozess        # zweifach gejoint: als sc_ww_prozessanl und sc_ww_prozessletztaend
+  - sc_ww_benutzer       # zweifach gejoint: als sc_ww_benutzeranl und sc_ww_benutzerletztaend
+  - sc_ww_scheckauszahlkz
+  - sc_ww_neukundekz
+  - sc_ww_wunschkzidfilialwerb
+  - sc_ww_fg
+  - sc_ww_eigenfremdkaufkz
+
+db_links: []
+
+precondition_tables: []
+precondition_processes: []
+
+parameters:
+  - termin   # WHERE dwh_processdate = &termin
+  - gbvid    # dwh_cr_load_id / dwh_up_load_id
+
+packages:
+  - PKG_STATS.GATHERTABLE
+  - PKG_IM_LADUNG.P_SC_ERROR_HANDLING
+
+sections:
+  - id: "0"
+    description: "Parameter-Ausgabe (PROMPT): termin, gbvid"
+  - id: "1"
+    description: "Source Core-Ladung Endtabelle sc_ww_kunde / sc_ww_kunde_ver"
+  - id: "1.1"
+    description: "Cleansing-Tabellen leeren: TRUNCATE clsc_ww_kunde, clsc_ww_kunde_1, clsc_ww_kunde_d"
+  - id: "1.2"
+    description: "INSERT ALL aus st_ww_kunde_b nach clsc_ww_kunde_1 (N/U) und clsc_ww_kunde_d (D)"
+  - id: "1.3"
+    description: "Statistiken: PKG_STATS.GATHERTABLE auf clsc_ww_kunde_1 und clsc_ww_kunde_d"
+  - id: "1.4"
+    description: "Error Handling: PKG_IM_LADUNG.P_SC_ERROR_HANDLING fuer clsc_ww_kunde / id_key"
+  - id: "1.5"
+    description: "INSERT FIRST aus clsc_ww_kunde_1 mit 30 LEFT OUTER JOINs auf SC-Lookup-Tabellen; Fehler-Saetze nach clsc_ww_kunde_e, gueltige nach clsc_ww_kunde"
+  - id: "1.6"
+    description: "Statistiken: PKG_STATS.GATHERTABLE auf clsc_ww_kunde und clsc_ww_kunde_e"
+  - id: "1.7"
+    description: "Fehler-Check: DECLARE-Block prueft COUNT(*) aus clsc_ww_kunde_e; RAISE_APPLICATION_ERROR(-20029) bei > 0 Eintraegen"
+
+notes: |
+  - Unsicherheit: created_at im Header als 'xx.04.2016' angegeben; genauer Tag unbekannt.
+  - Unsicherheit: Die Endtabellen sc_ww_kunde und sc_ww_kunde_ver sind deklariert, aber dieses
+    Script schreibt nur in clsc_ww_kunde. Uebernahme nach sc_ww_kunde/_ver erfolgt durch
+    nachgelagerten Prozess (nicht im Code sichtbar).
+  - sc_ww_kunde_ver erscheint nur im Header als Endtabelle, nicht im ausfuehrbaren Code.
+  - dwh_id_sc_ww_newsletter und dwh_id_sc_ww_nlabonnentstatus werden hartcodiert gesetzt
+    (Werte 25314038739 bzw. 25314038757); laut Kommentar 'mittlerweile obsolet'.
+  - sc_ww_adreinw ist laut Code-Kommentar ein Synonym auf sc_ww_telemkeinw.
+  - Referenzaufloesung auf sc_ww_newsletter und sc_ww_nlabonnentstatus wurde 22.02.2024 entfernt.
+  - Keine DB-Links im ausfuehrbaren Code.
+  - Keine GBV_BATCH_JOB- oder udwh_loadhistory-Preconditions.
+  - ALTER SESSION ENABLE PARALLEL DML aktiv.
+  - change_count 11: 05.05.2017, 07.11.2017, 12.11.2017, 07.06.2018, 11.06.2018, 19.07.2018,
+    10.12.2018, 01.09.2021, 29.10.2021, 22.02.2024, 11.07.2024.

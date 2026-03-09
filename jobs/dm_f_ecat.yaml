@@ -1,0 +1,189 @@
+name: dm_f_ecat
+description: |
+  Erstellt die Daten für das eCAT-Modul (elektronischer Katalog).
+  Lädt granulare Buchungsdaten (Brutto/Netto) und Wochenaggregate in vier
+  Zieltabellen. Wird pro Schnittstelle (SST) parametrisch ausgeführt.
+
+system_domain: eCAT / CC
+source_systems:
+  - Oracle UDWH
+  - Oracle PAPA (via DB-Link für CC_WW_KUNDE Loadhistory)
+
+orchestration:
+  engine: DSV / GBV
+  runner: Oracle SQL*Plus
+  frequency: täglich (LV-Tag-abhängig)
+  priority: (aus DSV nachziehen)
+
+parameters:
+  - name: datum
+    description: Prozessdatum
+  - name: vtsaison
+    description: VT-Saison (z.B. 103) – bestimmt Quell-Tabelle cc_kunde_&vtsaison
+  - name: gbvid
+    description: GBV-ID → wird als dwh_cr_load_id in Stages verwendet (Run-ID / Audit-Key)
+  - name: hjanfang
+    description: Halbjahresanfang
+  - name: termin
+    description: Prozesstermin (DSV-Termin)
+  - name: "5"
+    description: Schnittstellenkürzel (SST-Kürzel) – bestimmt Staging-Tabellennamen
+  - name: "6"
+    description: Schnittstellennummer – wird als BAJ_IPAR_4 für Gate-D-Concurrency-Guard verwendet
+
+sst_mapping:
+  # Jede SST läuft als eigene Job-Instanz mit eigenem &5/&6-Wert
+  WW:
+    kuerzel: WW       # &5
+    nummer: 1         # &6 → BAJ_IPAR_4 in Gate D
+    priority: aktiv   # aktuell relevant für Migration
+  FR:
+    kuerzel: FR
+    nummer:           # &6 kann 2, 3 oder 9 sein – je nach Lauf
+      - 2
+      - 3
+      - 9
+    priority: niedrig
+  US:
+    kuerzel: US
+    nummer: 5
+    priority: niedrig
+
+gates:
+  A:
+    typ: Exklusivität
+    beschreibung: Kein paralleler Lauf desselben DSV-Jobs (@JB())
+    sql: |
+      SELECT DECODE(COUNT(*), 0, 1, NULL)
+      FROM GBV_BATCH_JOB
+      WHERE BAJ_PROJEKT = 'DSV'
+        AND BAJ_IPAR_1 = @JB()
+        AND ( BAJ_STATUS = 'B'
+              OR (BAJ_STATUS = 'N' AND BAJ_TERMIN < @D(T,'dd.mm.yyyy hh24:mi:ss'))
+            )
+  B:
+    typ: Upstream-Abhängigkeit
+    beschreibung: |
+      LV-Tag-Check + CC_WW_BUCHUNG muss für heute erfolgreich gelaufen sein
+      (Loadhistory auf UDWH, dwh_noofrows > 0).
+      Wenn KEIN LV-Tag → Gate wird übersprungen (Job läuft immer durch).
+    upstream_job: CC_WW_BUCHUNG
+    sql: |
+      SELECT CASE WHEN lv = 0 THEN 1 ELSE buch END
+      FROM (SELECT COUNT(*) AS lv
+              FROM cc_fakturakalenderlv
+             WHERE dwh_valid_to = TO_DATE('31.12.9999','dd.mm.yyyy')
+               AND lvdat = @D(T)) lvinfo,
+           (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE NULL END AS buch
+              FROM udwh_loadhistory
+             WHERE dwh_destination = 'CC'
+               AND dwh_process     = 'CC_WW_BUCHUNG'
+               AND TRUNC(dwh_processdate) = @D(T)
+               AND dwh_runnumber   = 1
+               AND dwh_noofrows    > 0) lh
+  C:
+    typ: Upstream-Abhängigkeit
+    beschreibung: |
+      LV-Tag-Check + CC_WW_KUNDE muss für heute erfolgreich gelaufen sein
+      (Loadhistory via DB-Link @DBL_LOADER() = anderer DB-Kontext!).
+      Wenn KEIN LV-Tag → Gate wird übersprungen.
+    upstream_job: CC_WW_KUNDE
+    db_link: "@DBL_LOADER()"
+    sql: |
+      SELECT CASE WHEN lv = 0 THEN 1 ELSE stamm END
+      FROM (SELECT COUNT(*) AS lv
+              FROM cc_fakturakalenderlv
+             WHERE dwh_valid_to = TO_DATE('31.12.9999','dd.mm.yyyy')
+               AND lvdat = @D(T)) lvinfo,
+           (SELECT CASE WHEN COUNT(*) = 1 THEN 1 ELSE NULL END AS stamm
+              FROM udwh_dh.udwh_loadhistory@DBL_LOADER()
+             WHERE dwh_destination = 'CC'
+               AND dwh_process     = 'CC_WW_KUNDE'
+               AND TRUNC(dwh_processdate) = @D(T)
+               AND dwh_runnumber   = 1
+               AND dwh_noofrows    > 0) lh
+  D:
+    typ: SST-Concurrency-Guard
+    beschreibung: |
+      Kein anderer DSV-Job mit derselben SST-Nummer (&6 = BAJ_IPAR_4) darf laufen.
+      Verhindert parallele Läufe verschiedener Instanzen desselben SST.
+      (Wert von BAJ_IPAR_4 = &6, z.B. 1 für WW)
+    sql: |
+      SELECT CASE WHEN COUNT(*) < 1 THEN 1 ELSE NULL END
+      FROM gbv_batch_job
+      WHERE baj_projekt = 'DSV'
+        AND baj_status  = 'B'
+        AND baj_ipar_4  = &6
+
+staging_tables:
+  # Präfix: cldm_[&5]_ → z.B. cldm_ww_ für WW-Instanz
+  - cldm_{sst}_f_ecat_1        # Auftragskennzahlen
+  - cldm_{sst}_f_ecat_2        # Kundendaten
+  - cldm_{sst}_f_ecat_3        # Buchungsdaten (2x beschrieben: +Attributionen)
+  - cldm_{sst}_f_ecat_4        # Positions-Counts
+  - cldm_{sst}_f_ecat_5        # Attributionen (cc_snow_attribution)
+  - cldm_{sst}_f_ecat_6        # Join / Berechnung
+  - cldm_{sst}_f_ecat_7        # Gruppierung
+  - cldm_{sst}_f_ecat_brutto
+  - cldm_{sst}_f_ecat_netto
+  - cldm_{sst}_f_ecat_kwkum_brutto
+  - cldm_{sst}_f_ecat_kwkum_netto
+
+target_tables:
+  - name: dm_f_ecat_brutto
+    partition_key: RANGE(YYYYMM)       # Monatspartition
+    subpartition_key: (buchdat, firmabez)
+    idempotenz: Subpartition TRUNCATE + INSERT (kein MERGE)
+  - name: dm_f_ecat_netto
+    partition_key: RANGE(YYYYMM)
+    subpartition_key: (buchdat, firmabez)
+    idempotenz: Subpartition TRUNCATE + INSERT
+  - name: dm_f_ecat_kwkum_brutto
+    partition_key: LIST(witt_woche_id)
+    subpartition_key: (wittwochenr, firmabez)
+    idempotenz: Subpartition TRUNCATE + INSERT
+  - name: dm_f_ecat_kwkum_netto
+    partition_key: LIST(witt_woche_id)
+    subpartition_key: (wittwochenr, firmabez)
+    idempotenz: Subpartition TRUNCATE + INSERT
+
+source_tables:
+  - cc_buchung                  # Buchungsdaten → geladen von CC_WW_BUCHUNG
+  - cc_kunde_{vtsaison}         # Kundenstamm saisonspezifisch → geladen von CC_WW_KUNDE
+  - cc_snow_attribution         # Attributionsdaten (eigener Upstream unklar)
+  - cc_fakturakalenderlv        # LV-Kalender (Gate B + C)
+  - cc_kalender                 # Datum → witt_woche_id (Lookup, Abschluss-Skript)
+  - udwh_loadhistory            # Loadhistory UDWH (Gate B + Abschluss)
+  - udwh_dh.udwh_loadhistory    # Loadhistory anderer DB-Kontext via @DBL_LOADER() (Gate C)
+
+load_tracking:
+  tabelle: udwh_loadhistory
+  prozedur: PKG_IM_LADUNG.P_LOADHISTORY(:DSV_ABSCHLUSS_ID)
+  hinweis: |
+    Dieser Eintrag ist Input für Gate B/C anderer Jobs,
+    die dm_f_ecat als Upstream nutzen.
+
+framework_calls:
+  - PKG_IM_PARTITION.P_ADD_RANGEPARTITION  # Monatspartition anlegen
+  - PKG_IM_PARTITION.P_ADD_LISTPARTITION   # Wochenpartition anlegen
+  - PKG_IM_LADUNG.P_LADUNG_BEW             # Daten aus Stage in Zieltabelle laden
+  - PKG_IM_LADUNG.P_LOADHISTORY            # Loadhistory-Eintrag schreiben
+  - PKG_STATS                              # (erwähnt, Detail unklar)
+
+migration_status: in_progress
+
+notes: |
+  FOKUS: WW-Instanz (&5=WW, &6=1) – aktuell migrationspriorisiert.
+
+  Besonderheiten:
+  - Multi-Tenant via &5: dasselbe Script läuft für WW/FR/US mit eigenem Staging-Set
+  - LV-Tag-Logik: ohne LV-Tag laufen Gates B+C nicht → Job immer durch
+  - Gate C nutzt DB-Link (@DBL_LOADER()) → im Ziel Loadhistory konsolidieren
+  - cldm_*_f_ecat_3 wird ZWEIMAL beschrieben (Buchungen, dann +Attributionen)
+  - Idempotenz: kein MERGE, sondern Subpartition TRUNCATE + Reload
+
+  Offene Punkte:
+  - cc_snow_attribution: eigener Upstream-Gate? Oder implizit vorausgesetzt?
+  - FR-Lauf: welche Nummer (&6 = 2, 3 oder 9) je nach was?
+  - Vollständige Dim/Mapping-Tabellenliste aus Haupt-Script noch nicht extrahiert
+  - Wert von BAJ_IPAR_4 in Gate D als &6 abgeleitet (nicht aus DSV-GUI bestätigt)
