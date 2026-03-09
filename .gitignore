@@ -1,0 +1,16 @@
+# Windows WSL Alternate Data Streams
+*:Zone.Identifier
+
+# Exports (können sensible Produktionsdaten enthalten)
+exports/*.csv
+
+# Claude Code Internals
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.bak
